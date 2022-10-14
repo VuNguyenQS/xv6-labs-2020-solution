@@ -47,6 +47,35 @@ kvminit()
   kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 }
 
+pagetable_t pkvminit() {
+  pagetable_t pagetable = kalloc();
+  if (pagetable == 0)
+    return 0;
+  memset(pagetable, 0, PGSIZE);
+  // uart registers
+  mappages(pagetable ,UART0, PGSIZE,UART0, PTE_R | PTE_W);
+
+  // virtio mmio disk interface
+  mappages(pagetable, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_W);
+
+  // CLINT
+  mappages(pagetable, CLINT, 0x10000, CLINT, PTE_R | PTE_W);
+
+  // PLIC
+  mappages(pagetable, PLIC, 0x400000, PLIC, PTE_R | PTE_W);
+
+  // map kernel text executable and read-only.
+  mappages(pagetable ,KERNBASE, (uint64)etext-KERNBASE, KERNBASE, PTE_R | PTE_X);
+
+  // map kernel data and the physical RAM we'll make use of.
+  mappages(pagetable ,(uint64)etext, PHYSTOP-(uint64)etext, (uint64)etext, PTE_R | PTE_W);
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  mappages(pagetable, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X);
+  return pagetable;
+}
+
 // Switch h/w page table register to the kernel's page table,
 // and enable paging.
 void
@@ -131,12 +160,12 @@ kvmpa(uint64 va)
   uint64 off = va % PGSIZE;
   pte_t *pte;
   uint64 pa;
-  
+
   pte = walk(kernel_pagetable, va, 0);
-  if(pte == 0)
+  if(pte == 0) 
     panic("kvmpa");
-  if((*pte & PTE_V) == 0)
-    panic("kvmpa");
+  if((*pte & PTE_V) == 0) 
+    panic("kvmpa"); 
   pa = PTE2PA(*pte);
   return pa+off;
 }
@@ -312,8 +341,8 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   uint64 pa, i;
   uint flags;
   char *mem;
-
   for(i = 0; i < sz; i += PGSIZE){
+    printf("i %d ", i);
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
@@ -373,12 +402,16 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   return 0;
 }
 
+extern int copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len);
+
 // Copy from user to kernel.
 // Copy len bytes to dst from virtual address srcva in a given page table.
 // Return 0 on success, -1 on error.
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
-{
+{ 
+  //return copyin_new(pagetable, dst, srcva, len);
+  
   uint64 n, va0, pa0;
 
   while(len > 0){
@@ -396,15 +429,17 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
     srcva = va0 + PGSIZE;
   }
   return 0;
+  
 }
-
+int copyinstr_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max);
 // Copy a null-terminated string from user to kernel.
 // Copy bytes to dst from virtual address srcva in a given page table,
 // until a '\0', or max.
 // Return 0 on success, -1 on error.
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
-{
+{ //return copyinstr_new(pagetable, dst, srcva, max);
+  
   uint64 n, va0, pa0;
   int got_null = 0;
 
@@ -439,4 +474,146 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+  
 }
+
+void pteprint(int level, pte_t *pte) {
+  for (int i = 0; i < 512; i++) {
+    if (pte[i] & PTE_V) {
+      for (int k = 0; k <= level; k++)
+        printf(" ..");
+      printf("%d: pte %p pa %p\n", i, pte[i], PTE2PA(pte[i]));
+      if (level < 2)
+        pteprint(level + 1, (pte_t *) PTE2PA(pte[i]));
+    }
+  }
+}
+
+void vmprint(pagetable_t pagetable) {
+  printf("page table %p\n", pagetable);
+  pteprint(0, (pte_t *) pagetable);
+}
+/// @brief tested function which help copy kernel mapping to process kernel pgtb from some virtal address
+/// @param dstpgtb 
+/// @param va vitual address where we want copy usermaping
+/// @return 0 if success otherwise -1 mean failure
+int copymappings(pagetable_t dstpgtb, uint64 va) {
+  pagetable_t srcpgtb = kernel_pagetable;
+  for (int level = 2; level > -1; level--) {
+    uint64 range = 1 << PXSHIFT(level);
+    if (va % range) {
+      // Allocate new pagetable at idx
+      int idx = PX(level, va);
+      pagetable_t nextpgtb = (pagetable_t) kalloc();
+      if (nextpgtb == 0)
+        return -1;
+      memset(nextpgtb, 0, PGSIZE);
+      dstpgtb[idx] = PA2PTE(nextpgtb) | PTE_V;
+      // copy all the rest pte
+      for (int i = idx + 1; i < 512; i++)
+        dstpgtb[i] = srcpgtb[i];
+      dstpgtb = nextpgtb;
+      srcpgtb = (pagetable_t) PTE2PA(srcpgtb[idx]);
+    }
+    else {
+      for (int i = PX(level, va); i < 512; i++)
+        dstpgtb[i] = srcpgtb[i];
+      return 0;
+    }
+  }  
+  return -1;
+}
+
+void freemappings(pagetable_t dstpgtb, uint64 va) {
+
+  for (int level = 2; level > -1 && dstpgtb != 0; level--) {
+    uint64 range = 1 << PXSHIFT(level);
+    if (va % range) {
+      // Allocate new pagetable at idx
+      int idx = PX(level, va);
+      // copy all the rest pte
+      for (int i = idx + 1; i < 512; i++)
+        dstpgtb[i] = 0;
+      dstpgtb = (pagetable_t) PTE2PA(dstpgtb[idx]);
+    }
+    else {
+      for (int i = PX(level, va); i < 512; i++) 
+        dstpgtb[i] = 0;
+      return;
+    }
+  }  
+}
+
+int copy_umap_kmap(pagetable_t kerneltable, pagetable_t usertable, uint64 oldsz, uint64 newsz) {
+  if(oldsz >= newsz)
+    return 0;
+  oldsz = PGROUNDUP(oldsz);
+  for (uint64 va = oldsz; va < newsz; va += PGSIZE) {
+    pte_t *pte = walk(kerneltable, va, 1);
+    if (pte == 0) {
+      uvmunmap(kerneltable, oldsz, (va - oldsz) / PGSIZE, 0);
+      return -1;
+    }
+    pte_t *userpte = walk(usertable, va, 0);
+    if (userpte == 0)
+      panic("usertable unmap va < size");
+    *pte = (*userpte) & (~PTE_U);
+  }
+  return 0;
+}
+void compare_pagetable(pagetable_t kernel, pagetable_t user, uint64 sz) {
+  for (uint64 va = 0; va < sz; va += PGSIZE) {
+      pte_t *pa1 = walk(kernel, va, 0);
+      pte_t *pa2 = walk(user, va, 0);
+      if (pa1 == 0) {
+        if (pa2 == 0)
+          continue;
+        if (*pa2 & PTE_V) {
+          printf("error at va %p with kernel donthave pte but user have mapping\n", va);
+          break;
+        }
+      }
+      else {
+        if (*pa1 & PTE_V) {
+          if (pa2 == 0) {
+            printf("error at va %p with user dont have pte but kernal have\n", va);
+            break;
+          }
+          if (*pa2 & PTE_V) {
+            if (PTE2PA(*pa1) != PTE2PA(*pa2)) {
+              printf("error kernal and user dont map at the same phys at va %p", va);
+              break;
+            }
+          }
+          else {
+            printf("error user dont map but kernel have map at va %p", va);
+            break;
+          }  
+        }
+        else {
+          if (pa2 != 0 && (*pa2 & PTE_V)) {
+            printf("error kernel dont have map but user have map at va %p", va);
+            break;
+          }
+        }
+      }
+    }
+}
+
+void testkernelcopy(pagetable_t pagetable, uint64 begin) {
+  for (uint64 va = begin; va < PHYSTOP; va += PGSIZE) {
+    pte_t *pa1 = walk(pagetable, va, 0);
+    pte_t *pa2 = walk(kernel_pagetable, va, 0);
+    if (pa1 == 0 && pa2 == 0)
+      continue;
+    if (pa1 == 0) {
+      printf("error in process knpgtb va %p\n", va);
+      break;
+    }
+    if (*pa1 != *pa2) {
+      printf("error in copy \n");
+      break;
+    }
+  }
+}
+
