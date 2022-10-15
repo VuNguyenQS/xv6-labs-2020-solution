@@ -58,8 +58,8 @@ pagetable_t pkvminit() {
   // virtio mmio disk interface
   mappages(pagetable, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_W);
 
-  // CLINT
-  mappages(pagetable, CLINT, 0x10000, CLINT, PTE_R | PTE_W);
+  // CLINT dont map clint
+  //mappages(pagetable, CLINT, 0x10000, CLINT, PTE_R | PTE_W);
 
   // PLIC
   mappages(pagetable, PLIC, 0x400000, PLIC, PTE_R | PTE_W);
@@ -342,7 +342,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   uint flags;
   char *mem;
   for(i = 0; i < sz; i += PGSIZE){
-    printf("i %d ", i);
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
@@ -410,8 +409,8 @@ extern int copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 { 
-  //return copyin_new(pagetable, dst, srcva, len);
-  
+  return copyin_new(pagetable, dst, srcva, len);
+  /*
   uint64 n, va0, pa0;
 
   while(len > 0){
@@ -429,7 +428,7 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
     srcva = va0 + PGSIZE;
   }
   return 0;
-  
+  */
 }
 int copyinstr_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max);
 // Copy a null-terminated string from user to kernel.
@@ -438,8 +437,8 @@ int copyinstr_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max);
 // Return 0 on success, -1 on error.
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
-{ //return copyinstr_new(pagetable, dst, srcva, max);
-  
+{ return copyinstr_new(pagetable, dst, srcva, max);
+  /*
   uint64 n, va0, pa0;
   int got_null = 0;
 
@@ -474,7 +473,7 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
-  
+  */
 }
 
 void pteprint(int level, pte_t *pte) {

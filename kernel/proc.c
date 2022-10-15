@@ -120,18 +120,16 @@ found:
     release(&p->lock);
     return 0;
   }
-  //testkernelcopy(p->kernelpagetable, PLIC);
   //allocate a page for kstack of the process
   //and followed by a guard page
   char *pa = kalloc();
-  if(pa == 0) {
+  if (pa == 0) {
     freeproc(p);
     release(&p->lock);
     return 0;
   }
-    
   uint64 va = KSTACK((int) (p - proc));
-  mappages(p->kernelpagetable, va, PGSIZE, (uint64)pa, PTE_R | PTE_W);
+  mappages(p->kernelpagetable, va, PGSIZE, (uint64) pa, PTE_R | PTE_W);
   p->kstack = va;
 
   // An empty user page table.
@@ -161,33 +159,25 @@ freeproc(struct proc *p)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
 
-  compare_pagetable(p->kernelpagetable, p->pagetable, PLIC);
-
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
-
-  for (uint64 va = 0; va < PLIC; va += PGSIZE) {
-      pte_t *pte = walk(p->pagetable, va, 0);
-      if (pte != 0 && *pte != 0) {
-        printf("error in free mapping\n");
-        printf("va %d and size %d\n", va, p->sz);
-      }
-    }
-
   
   if(p->kernelpagetable) {
-    uvmunmap(p->kernelpagetable, p->kstack, 1, 1);
-    freemappings(p->kernelpagetable, PLIC);
+    //unmap user part
     
     uvmunmap(p->kernelpagetable, 0, PGROUNDUP(p->sz)/PGSIZE, 0);
-    for (uint64 va = 0; va < PLIC; va += PGSIZE) {
-      pte_t *pte = walk(p->kernelpagetable, va, 0);
-      if (pte != 0 && *pte != 0) {
-        printf("error in free mapping\n");
-        printf("va %d and size %d\n", va, p->sz);
-      }
-    }
+    //unmap  from PLIC to PHYSTOP
+    /*
+    uvmunmap(p->kernelpagetable, PLIC, 0x400000/PGSIZE, 0);
+    uvmunmap(p->kernelpagetable, UART0, 1, 0);
+    uvmunmap(p->kernelpagetable, VIRTIO0, 1, 0);
+    uvmunmap(p->kernelpagetable, KERNBASE, (PHYSTOP - KERNBASE)/PGSIZE, 0);
+    //unmap trampoline page and kstack
     
+    uvmunmap(p->kernelpagetable, TRAMPOLINE, 1, 0);
+    */
+    uvmunmap(p->kernelpagetable, p->kstack, 1, 1);
+    freemappings(p->kernelpagetable, PLIC);
     freewalk(p->kernelpagetable);
   }
   
@@ -321,11 +311,10 @@ growproc(int n)
       uvmdealloc(p->pagetable, sz, oldsz);
       return -1;
     }
-    //compare_pagetable(p->kernelpagetable, p->pagetable, sz);
     
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
-    uvmdealloc(p->kernelpagetable, oldsz, sz);
+    uvmunmap(p->kernelpagetable, PGROUNDUP(sz), (PGROUNDUP(oldsz) - PGROUNDUP(sz))/PGSIZE, 0);
   }
   p->sz = sz;
   return 0;
@@ -344,7 +333,6 @@ fork(void)
   if((np = allocproc()) == 0){
     return -1;
   }
-  testkernelcopy(p->kernelpagetable, PLIC);
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
@@ -560,8 +548,8 @@ scheduler(void)
         p->state = RUNNING;
         c->proc = p;
         
-        //w_satp(MAKE_SATP(p->kernelpagetable));
-        //sfence_vma();
+        w_satp(MAKE_SATP(p->kernelpagetable));
+        sfence_vma();
         
         swtch(&c->context, &p->context);
 
