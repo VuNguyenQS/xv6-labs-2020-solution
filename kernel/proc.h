@@ -93,6 +93,10 @@ struct proc {
   int killed;                  // If non-zero, have been killed
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
+  int countticks;              // accumulate comsume ticks 
+  int nticks;                  // number of ticks 
+  void *fnhandler;             // handler function pointer 
+  int sysreturn;               // does handler return? 
 
   // these are private to the process, so p->lock need not be held.
   uint64 kstack;               // Virtual address of kernel stack

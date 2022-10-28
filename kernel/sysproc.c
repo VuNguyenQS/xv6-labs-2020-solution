@@ -70,6 +70,7 @@ sys_sleep(void)
     sleep(&ticks, &tickslock);
   }
   release(&tickslock);
+  backtrace();
   return 0;
 }
 
@@ -94,4 +95,33 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_sigalarm(void)
+{ 
+  struct proc *p = myproc();
+  uint64 fnaddr;
+  argaddr(1, &fnaddr);
+  if (fnaddr >= p->sz)
+    return -1;
+  int ticks;
+  argint(0, &ticks);
+  p->nticks = ticks;
+  p->countticks = 0;
+  p->fnhandler = (void *) fnaddr;
+  return 0;
+}
+
+uint64
+sys_sigreturn(void)
+{
+ struct proc *p = myproc();
+ if (p->sysreturn || p->nticks == 0 || p->countticks < p->nticks -1)
+  return -1;
+ p->trapframe[0] = p->trapframe[1];
+ p->sysreturn = 1;
+ //set counttick to zero
+ p->countticks = 0;
+ return 0;
 }
