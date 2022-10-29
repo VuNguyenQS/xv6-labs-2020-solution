@@ -75,6 +75,11 @@ sys_read(void)
 
   if(argfd(0, 0, &f) < 0 || argint(2, &n) < 0 || argaddr(1, &p) < 0)
     return -1;
+  struct proc *process = myproc();
+  if (p + n > process->sz || p + n < p)
+    return -1;
+  if (lazymalloc(process->pagetable, p, n) < 0)
+    return -1;
   return fileread(f, p, n);
 }
 
@@ -86,6 +91,11 @@ sys_write(void)
   uint64 p;
 
   if(argfd(0, 0, &f) < 0 || argint(2, &n) < 0 || argaddr(1, &p) < 0)
+    return -1;
+  struct proc *process = myproc();
+  if (p + n > process->sz || p + n < p)
+    return -1;
+  if (lazymalloc(process->pagetable, p, n) < 0)
     return -1;
 
   return filewrite(f, p, n);
@@ -109,9 +119,15 @@ sys_fstat(void)
 {
   struct file *f;
   uint64 st; // user pointer to struct stat
+  struct proc *p = myproc();
 
   if(argfd(0, 0, &f) < 0 || argaddr(1, &st) < 0)
     return -1;
+  if (st >= p->sz || st + sizeof(struct stat) > p->sz)
+    return -1;
+  if (lazymalloc(p->pagetable, st, sizeof(struct stat)) < 0)
+    return -1;
+  
   return filestat(f, st);
 }
 
@@ -463,6 +479,10 @@ sys_pipe(void)
   struct proc *p = myproc();
 
   if(argaddr(0, &fdarray) < 0)
+    return -1;
+  if (fdarray >= p->sz || fdarray + 2*sizeof(fd0) > p->sz)
+    return -1;
+  if (lazymalloc(p->pagetable, fdarray, 2*sizeof(fd0)) < 0)
     return -1;
   if(pipealloc(&rf, &wf) < 0)
     return -1;

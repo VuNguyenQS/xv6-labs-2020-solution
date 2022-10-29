@@ -35,6 +35,11 @@ sys_wait(void)
   uint64 p;
   if(argaddr(0, &p) < 0)
     return -1;
+  struct proc *process = myproc();
+  if (p >= process->sz || p+sizeof(int) > process->sz)
+    return -1;
+  if (lazymalloc(process->pagetable, p, sizeof(int)) < 0)
+    return -1;
   return wait(p);
 }
 
@@ -43,12 +48,18 @@ sys_sbrk(void)
 {
   int addr;
   int n;
+  struct proc *p = myproc();
 
   if(argint(0, &n) < 0)
     return -1;
-  addr = myproc()->sz;
-  if(growproc(n) < 0)
-    return -1;
+  
+  addr = p->sz;
+  if (n >= 0)
+    p->sz += n;
+  else
+    p->sz = uvmdealloc(p->pagetable, addr, addr + n);
+  //if(growproc(n) < 0)
+  //  return -1;
   return addr;
 }
 
