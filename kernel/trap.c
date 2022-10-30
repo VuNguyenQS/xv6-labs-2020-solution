@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "kalloc.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -67,6 +68,16 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause() == 15) {
+    uint64 va = r_stval();
+    if ((va < p->sz && va >= p->stackbase) || (va < p->stackbase - PGSIZE)) {          //is va valid
+      pte_t* pte = walk(p->pagetable, va, 0);   //get pte
+      if (pte == 0)
+        panic("unmap where va < p->sz");
+      if (copyonwrite(pte) == 0)
+        p->killed = 1;
+    }
+    else p->killed = 1;
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());

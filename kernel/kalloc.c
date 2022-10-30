@@ -8,11 +8,15 @@
 #include "spinlock.h"
 #include "riscv.h"
 #include "defs.h"
+#include "kalloc.h"
 
 void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
+
+char *countrefs;
+uint64 freestart;
 
 struct run {
   struct run *next;
@@ -27,7 +31,11 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  
+  freestart  = PGROUNDUP((uint64)(end + (PHYSTOP - PGROUNDUP((uint64)end))/PGSIZE));
+  countrefs = end;
+  
+  freerange((void *)freestart, (void*)PHYSTOP);
 }
 
 void
@@ -53,7 +61,7 @@ kfree(void *pa)
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
-
+  countrefs[PGIDX((uint64)pa)] = 0;
   r = (struct run*)pa;
 
   acquire(&kmem.lock);
@@ -76,7 +84,9 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r) {
     memset((char*)r, 5, PGSIZE); // fill with junk
+    countrefs[PGIDX((uint64) r)] = 1;
+  }
   return (void*)r;
 }

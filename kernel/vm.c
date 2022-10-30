@@ -5,6 +5,7 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "kalloc.h"
 
 /*
  * the kernel's page table.
@@ -188,7 +189,9 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: not a leaf");
     if(do_free){
       uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);
+      if (countrefs[PGIDX(pa)] == 1)
+        kfree((void*)pa);
+      else countrefs[PGIDX(pa)]--;
     }
     *pte = 0;
   }
@@ -335,6 +338,23 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   return -1;
 }
 
+int
+uvmcopynew(pagetable_t old, pagetable_t new, uint64 sz)
+{
+  uint64 va = 0;
+  pte_t *oldpte, *newpte;
+  for (; va < sz; va += PGSIZE) {
+    if ((oldpte = walk(old, va, 0)) == 0)
+      panic("uvmcopynew: pte should exist");
+    if ((newpte = walk(new, va, 1)) == 0)
+      return -1;
+    *oldpte &= ~PTE_W;
+    *newpte = *oldpte;
+    countrefs[PGIDX(PTE2PA(*oldpte))]++;
+  }
+  return 0;
+}
+
 // mark a PTE invalid for user access.
 // used by exec for the user stack guard page.
 void
@@ -355,12 +375,23 @@ int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
-
+  pte_t *pte;
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
+    if (va0 >= MAXVA)
       return -1;
+    pte = walk(pagetable, va0, 0);
+    if (pte == 0)
+      return -1;
+    if((*pte & PTE_V) == 0)
+      return -1;
+    if((*pte & PTE_U) == 0)
+      return -1;
+    if((*pte & PTE_W) == 0) {
+      if ((pa0 = copyonwrite(pte)) == 0)
+        return -1;
+    }
+    else pa0 = PTE2PA(*pte);
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
@@ -439,4 +470,21 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+uint64
+copyonwrite(pte_t* pte) {
+  uint64 oldpa = PTE2PA(*pte);
+  if (countrefs[PGIDX(oldpa)] == 1){
+    *pte |= PTE_W;
+    return oldpa;
+  }
+  countrefs[PGIDX(oldpa)]--;
+  uint64 pa = (uint64) kalloc();                          
+  if (pa == 0)
+    return pa;                               //set up new write page
+  memmove((void*) pa, (void*) oldpa, PGSIZE);  //copy content
+  uint flags = PTE_FLAGS(*pte);
+  *pte = PA2PTE(pa) | flags | PTE_W;
+  return pa;
 }
