@@ -5,7 +5,6 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
-#include "kalloc.h"
 
 /*
  * the kernel's page table.
@@ -189,9 +188,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: not a leaf");
     if(do_free){
       uint64 pa = PTE2PA(*pte);
-      if (countrefs[PGIDX(pa)] == 1)
-        kfree((void*)pa);
-      else countrefs[PGIDX(pa)]--;
+      kfree((void*) pa);
     }
     *pte = 0;
   }
@@ -346,11 +343,13 @@ uvmcopynew(pagetable_t old, pagetable_t new, uint64 sz)
   for (; va < sz; va += PGSIZE) {
     if ((oldpte = walk(old, va, 0)) == 0)
       panic("uvmcopynew: pte should exist");
+    if((*oldpte & PTE_V) == 0)
+      panic("uvmcopy: page not present");
     if ((newpte = walk(new, va, 1)) == 0)
       return -1;
     *oldpte &= ~PTE_W;
     *newpte = *oldpte;
-    countrefs[PGIDX(PTE2PA(*oldpte))]++;
+    reference(PTE2PA(*oldpte));
   }
   return 0;
 }
@@ -475,16 +474,13 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 uint64
 copyonwrite(pte_t* pte) {
   uint64 oldpa = PTE2PA(*pte);
-  if (countrefs[PGIDX(oldpa)] == 1){
-    *pte |= PTE_W;
-    return oldpa;
-  }
-  countrefs[PGIDX(oldpa)]--;
-  uint64 pa = (uint64) kalloc();                          
+  uint64 pa = kcopy(oldpa);                         
   if (pa == 0)
-    return pa;                               //set up new write page
-  memmove((void*) pa, (void*) oldpa, PGSIZE);  //copy content
+    return pa;   
+                            //set up new write page
+  //memmove((void*) pa, (void*) oldpa, PGSIZE);  //copy content
   uint flags = PTE_FLAGS(*pte);
   *pte = PA2PTE(pa) | flags | PTE_W;
+  
   return pa;
 }
