@@ -346,12 +346,16 @@ uvmcopynew(pagetable_t old, pagetable_t new, uint64 sz)
     if((*oldpte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     if ((newpte = walk(new, va, 1)) == 0)
-      return -1;
-    *oldpte &= ~PTE_W;
+      goto err;
+    *oldpte &= (~PTE_W);
     *newpte = *oldpte;
-    reference(PTE2PA(*oldpte));
+    krefer(PTE2PA(*oldpte));
   }
   return 0;
+
+err:
+  uvmunmap(new, 0, va / PGSIZE, 1);
+  return -1;
 }
 
 // mark a PTE invalid for user access.
@@ -474,13 +478,14 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 uint64
 copyonwrite(pte_t* pte) {
   uint64 oldpa = PTE2PA(*pte);
-  uint64 pa = kcopy(oldpa);                         
-  if (pa == 0)
-    return pa;   
-                            //set up new write page
+  uint64 pa = kcopy(oldpa); 
+
+   //update pte                         //set up new write page
   //memmove((void*) pa, (void*) oldpa, PGSIZE);  //copy content
-  uint flags = PTE_FLAGS(*pte);
-  *pte = PA2PTE(pa) | flags | PTE_W;
-  
+                         
+  if (pa == 0)
+    return 0; 
+  *pte = PA2PTE(pa) | PTE_FLAGS(*pte) | PTE_W;  
+
   return pa;
 }

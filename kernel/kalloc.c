@@ -27,13 +27,22 @@ struct {
   uchar *countrefs;
 } kmem;
 
+int check_addr_infreelist(uint64 pa) {
+  for (struct run* addr = kmem.freelist; addr != 0; addr = addr->next) {
+    if ((uint64)addr == pa)
+     return 1;
+  }
+  return 0;
+}
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
-  
-  freestart  = PGROUNDUP((uint64)(end + (PHYSTOP - PGROUNDUP((uint64)end))/PGSIZE));
+  int maxpage = (PHYSTOP - PGROUNDUP((uint64)end))/PGSIZE;
+  freestart  = PGROUNDUP((uint64)(end + maxpage*sizeof(uchar)));
   kmem.countrefs = (uchar*) end;
+  memset(end, 0, freestart - (uint64)end);
   
   freerange((void *)freestart, (void*)PHYSTOP);
 }
@@ -88,7 +97,13 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
+  
   if(r) {
+    uint64 pa = (uint64) r;
+  if((pa % PGSIZE) != 0 || pa < freestart || pa >= PHYSTOP){
+    printf("pa %p", pa);
+    panic("unvalid pa in kalloc");
+  }
     if (kmem.countrefs[PGIDX((uint64) r)] != 0)
       panic("alloc a free memory have count not zero");
     kmem.freelist = r->next;
@@ -103,13 +118,15 @@ kalloc(void)
 }
 
 void
-reference(uint64 pa)
+krefer(uint64 pa)
 {
   if((pa % PGSIZE) != 0 || pa < freestart || pa >= PHYSTOP)
     panic("unvalid pa in refs");
   acquire(&kmem.lock);
   if (kmem.countrefs[PGIDX(pa)] < 1) {
-    printf("%d\n", kmem.countrefs[PGIDX(pa)]);
+    int in = check_addr_infreelist(pa);
+    printf("in %d\n", in);
+    printf("pa %p address %p and count%d\n", pa, &kmem.countrefs[PGIDX(pa)], kmem.countrefs[PGIDX(pa)]);
     panic("refer a free memory from reference");
   }
   kmem.countrefs[PGIDX(pa)]++;
@@ -124,17 +141,25 @@ kcopy(uint64 pa) {
   acquire(&kmem.lock);
   if (kmem.countrefs[PGIDX(pa)] < 1){
     printf("%d\n", kmem.countrefs[PGIDX(pa)]);
-    panic("refer a free memory");
+    panic("refer a free memory in kcopy");
   }
   if (kmem.countrefs[PGIDX(pa)] == 1) {
     release(&kmem.lock);
     return pa;
   }
-  kmem.countrefs[PGIDX(pa)]--;
   r = kmem.freelist;
+ 
   if(r) {
+    uint64 paa = (uint64) r;
+    if((paa % PGSIZE) != 0 || paa < freestart || paa >= PHYSTOP) {
+    printf("paa %p\n", paa);
+    panic("unvalid pa in kacopy");
+    }
+    if (kmem.countrefs[PGIDX((uint64) r)]!=0)
+      panic("free memory with count !=0");
     kmem.freelist = r->next;
     kmem.countrefs[PGIDX((uint64) r)] = 1;
+    kmem.countrefs[PGIDX(pa)]--;
   }
   release(&kmem.lock);
   if(r) 
@@ -142,3 +167,5 @@ kcopy(uint64 pa) {
     memmove(r, (void *) pa, PGSIZE);
   return (uint64) r;
 }
+
+

@@ -2540,9 +2540,7 @@ void
 execout(char *s)
 {
   for(int avail = 0; avail < 15; avail++){
-    
     int pid = fork();
-    printf("pid %d\n", pid);
     if(pid < 0){
       printf("fork failed\n");
       exit(1);
@@ -2560,14 +2558,12 @@ execout(char *s)
       for(int i = 0; i < avail; i++)
         sbrk(-4096);
       
-      //close(1);
+      close(1);
       char *args[] = { "echo", "x", 0 };
-      int k = exec("echo", args);
-      printf("exec ret %d\n", k);
+      exec("echo", args);
       exit(0);
     } else {
-      int retpid = wait((int*)0);
-      printf("return pid %d\n", retpid);
+      wait((int*)0);
     }
   }
 
