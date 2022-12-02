@@ -2638,6 +2638,8 @@ main(int argc, char *argv[])
     void (*f)(char *);
     char *s;
   } tests[] = {
+    {reparent, "reparent" },
+    {twochildren, "twochildren"},
     {execout, "execout"},
     {copyin, "copyin"},
     {copyout, "copyout"},
@@ -2652,8 +2654,7 @@ main(int argc, char *argv[])
     {sbrkbugs, "sbrkbugs" },
     // {badwrite, "badwrite" },
     {badarg, "badarg" },
-    {reparent, "reparent" },
-    {twochildren, "twochildren"},
+    
     {forkfork, "forkfork"},
     {forkforkfork, "forkforkfork"},
     {argptest, "argptest"},

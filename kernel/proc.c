@@ -317,13 +317,13 @@ reparent(struct proc *p)
     if(pp->parent == p){
       // pp->parent can't change between the check and the acquire()
       // because only the parent changes it, and we're the parent.
-      acquire(&pp->lock);
+      //acquire(&pp->lock);
       pp->parent = initproc;
       // we should wake up init here, but that would require
       // initproc->lock, which would be a deadlock, since we hold
       // the lock on one of init's children (pp). this is why
       // exit() always wakes init (before acquiring any locks).
-      release(&pp->lock);
+      //release(&pp->lock);
     }
   }
 }
@@ -353,14 +353,17 @@ exit(int status)
   end_op();
   p->cwd = 0;
 
+  // Give any children to init.
+  reparent(p);
+
   // we might re-parent a child to init. we can't be precise about
   // waking up init, since we can't acquire its lock once we've
   // acquired any other proc lock. so wake up init whether that's
   // necessary or not. init may miss this wakeup, but that seems
   // harmless.
-  acquire(&initproc->lock);
-  wakeup1(initproc);
-  release(&initproc->lock);
+  // acquire(&initproc->lock);
+  // wakeup1(initproc);
+  // release(&initproc->lock);
 
   // grab a copy of p->parent, to ensure that we unlock the same
   // parent we locked. in case our parent gives us away to init while
@@ -368,26 +371,33 @@ exit(int status)
   // exiting parent, but the result will be a harmless spurious wakeup
   // to a dead or wrong process; proc structs are never re-allocated
   // as anything else.
-  acquire(&p->lock);
+  //acquire(&p->lock);
   struct proc *original_parent = p->parent;
-  release(&p->lock);
+  //release(&p->lock);
   
   // we need the parent's lock in order to wake it up from wait().
   // the parent-then-child rule says we have to lock it first.
+
+  // this change come from me (VuNguyen) we dont know our parent so
+  // we need to wakeup original parent and root parent(initproc)
+  if (original_parent != initproc) {
+    acquire(&initproc->lock);
+    wakeup1(initproc);
+  }
+
+  
   acquire(&original_parent->lock);
-
-  acquire(&p->lock);
-
-  // Give any children to init.
-  reparent(p);
 
   // Parent might be sleeping in wait().
   wakeup1(original_parent);
 
+  acquire(&p->lock);
+  release(&original_parent->lock);
+  if (original_parent != initproc)
+    release(&initproc->lock);
+
   p->xstate = status;
   p->state = ZOMBIE;
-
-  release(&original_parent->lock);
 
   // Jump into the scheduler, never to return.
   sched();
