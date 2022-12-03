@@ -380,21 +380,23 @@ exit(int status)
 
   // this change come from me (VuNguyen) we dont know our parent so
   // we need to wakeup original parent and root parent(initproc)
+  // when we reparent, maybe its child is zomebie, so we need wakeup initproc to clean it up
+  acquire(&initproc->lock);
+  wakeup1(initproc);
+  
   if (original_parent != initproc) {
-    acquire(&initproc->lock);
-    wakeup1(initproc);
+    acquire(&original_parent->lock);
+
+    // Parent might be sleeping in wait().
+    wakeup1(original_parent);
   }
 
-  
-  acquire(&original_parent->lock);
-
-  // Parent might be sleeping in wait().
-  wakeup1(original_parent);
-
   acquire(&p->lock);
-  release(&original_parent->lock);
+  
   if (original_parent != initproc)
-    release(&initproc->lock);
+    release(&original_parent->lock);
+  
+  release(&initproc->lock);
 
   p->xstate = status;
   p->state = ZOMBIE;
