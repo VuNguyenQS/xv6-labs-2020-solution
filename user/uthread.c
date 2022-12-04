@@ -14,11 +14,11 @@
 struct thread {
   char       stack[STACK_SIZE]; /* the thread's stack */
   int        state;             /* FREE, RUNNING, RUNNABLE */
-
+  void*      sp;
 };
 struct thread all_thread[MAX_THREAD];
 struct thread *current_thread;
-extern void thread_switch(uint64, uint64);
+extern void thread_switch(void**, void**);
               
 void 
 thread_init(void)
@@ -63,6 +63,8 @@ thread_schedule(void)
      * Invoke thread_switch to switch from t to next_thread:
      * thread_switch(??, ??);
      */
+    //printf("%p sp and funcaddress %p \n", next_thread->sp, *((uint64 *) (next_thread->sp + 96)));
+    thread_switch(&t->sp, &current_thread->sp);
   } else
     next_thread = 0;
 }
@@ -77,6 +79,8 @@ thread_create(void (*func)())
   }
   t->state = RUNNABLE;
   // YOUR CODE HERE
+  t->sp = (void *) (t->stack + STACK_SIZE - 104);
+  *((uint64 *) (t->sp + 96)) = (uint64) func;
 }
 
 void 
