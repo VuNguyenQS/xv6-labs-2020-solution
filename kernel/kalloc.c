@@ -14,6 +14,9 @@ void freerange(void *pa_start, void *pa_end);
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
+extern void pop_off();
+extern void push_off();
+
 struct run {
   struct run *next;
 };
@@ -21,13 +24,43 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+  uint64 count;
+} kmem[NCPU];
+
+void 
+stealfreemem(int myc) {
+  for (int cid = 0; cid < NCPU && kmem[cid].lock.name; cid++) {
+    acquire(&kmem[cid].lock);
+    if (kmem[cid].count > 0) {
+      uint64 numofmem = kmem[cid].count / 2;
+      struct run firstrun;
+      firstrun.next = kmem[cid].freelist;
+      struct run *r = &firstrun;
+      for (uint64 num = 0; num < numofmem; num++)
+        r = r->next;
+      acquire(&kmem[myc].lock);
+      kmem[myc].count = kmem[cid].count - numofmem;
+      kmem[myc].freelist = r->next;
+      r->next = 0;
+      release(&kmem[myc].lock);
+      kmem[cid].count = numofmem;
+      kmem[cid].freelist = firstrun.next;
+      release(&kmem[cid].lock);
+      break;
+    }
+    release(&kmem[cid].lock);
+  }
+}
 
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  push_off();
+  int myc = cpuid();
+  initlock(&kmem[myc].lock, "kmem");
+  if (myc == 0)
+    freerange(end, (void*)PHYSTOP);
+  pop_off();
 }
 
 void
@@ -56,10 +89,14 @@ kfree(void *pa)
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  push_off();
+  int myc = cpuid();
+  acquire(&kmem[myc].lock);
+  r->next = kmem[myc].freelist;
+  kmem[myc].freelist = r;
+  kmem[myc].count++;
+  release(&kmem[myc].lock);
+  pop_off();
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -70,13 +107,24 @@ kalloc(void)
 {
   struct run *r;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  push_off();
+  int myc = cpuid();
+  acquire(&kmem[myc].lock);
+  if (kmem[myc].count == 0) {
+    release(&kmem[myc].lock);
+    stealfreemem(myc);
+    acquire(&kmem[myc].lock);
+  }
+  r = kmem[myc].freelist;
+  if(r) {
+    kmem[myc].freelist = r->next;
+    kmem[myc].count--;
+  }
+  release(&kmem[myc].lock);
+  pop_off();
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
+
   return (void*)r;
 }
