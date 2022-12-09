@@ -33,23 +33,31 @@ struct {
   struct buf head;
 } bcache;
 
+#define NBUCK 13
+
+struct {
+  struct spinlock lock[NBUCK];
+  struct buf buck[NBUCK];
+} htable;
+
 void
 binit(void)
 {
   struct buf *b;
+  struct buf *run = htable.buck;
 
   initlock(&bcache.lock, "bcache");
 
   // Create linked list of buffers
-  bcache.head.prev = &bcache.head;
-  bcache.head.next = &bcache.head;
-  for(b = bcache.buf; b < bcache.buf+NBUF; b++){
-    b->next = bcache.head.next;
-    b->prev = &bcache.head;
+  //bcache.head.prev = &bcache.head;
+  //bcache.head.next = &bcache.head;
+  for(b = bcache.buf; b < bcache.buf+NBUF; b++){ 
     initsleeplock(&b->lock, "buffer");
-    bcache.head.next->prev = b;
-    bcache.head.next = b;
+    run->samehash = b;
+    run = b;
   }
+  for (int i = 0; i < NBUCK; i++)
+    initlock(htable.lock + i, "bcache.bucket");
 }
 
 // Look through buffer cache for block on device dev.
@@ -59,30 +67,63 @@ static struct buf*
 bget(uint dev, uint blockno)
 {
   struct buf *b;
-
-  acquire(&bcache.lock);
-
-  // Is the block already cached?
-  for(b = bcache.head.next; b != &bcache.head; b = b->next){
-    if(b->dev == dev && b->blockno == blockno){
-      b->refcnt++;
-      release(&bcache.lock);
-      acquiresleep(&b->lock);
-      return b;
+  //find the right bucket
+  int hash = blockno % NBUCK;
+  acquire(htable.lock + hash);
+  //Look up the block in hash bucket
+  struct buf *found = 0;
+  for (struct buf *run = htable.buck[hash].samehash; run; run = run->samehash) {
+    if (run->blockno == blockno && run->dev == dev) {
+      run->refcnt++;
+      release(htable.lock + hash);
+      //release(&bcache.lock);
+      acquiresleep(&run->lock);
+      return run;
+    }
+    if (run->refcnt == 0) {
+      if (found) {
+        if (found->time < run->time)
+          found = run;
+      }
+      else found = run;
     }
   }
-
+  
+  if (found) {
+    found->blockno = blockno;
+    found->dev = dev;
+    found->valid = 0;
+    found->refcnt = 1;
+    release(htable.lock + hash);
+    acquiresleep(&found->lock);
+    return found;
+  }
   // Not cached.
   // Recycle the least recently used (LRU) unused buffer.
-  for(b = bcache.head.prev; b != &bcache.head; b = b->prev){
-    if(b->refcnt == 0) {
-      b->dev = dev;
-      b->blockno = blockno;
-      b->valid = 0;
-      b->refcnt = 1;
-      release(&bcache.lock);
-      acquiresleep(&b->lock);
-      return b;
+  acquire(&bcache.lock);
+  for (b = bcache.buf; b < bcache.buf + NBUF; b++) {
+    if (b->refcnt == 0) {
+      hash = b->blockno % NBUCK;
+      acquire(htable.lock + hash);
+      if (b->refcnt == 0){
+        struct buf * run = htable.buck + hash;
+        for (; run->samehash != b; run = run->samehash);
+        run->samehash = b->samehash;
+        release(htable.lock + hash);
+        b->refcnt = 1;
+        release(&bcache.lock);
+        b->dev = dev;
+        b->blockno = blockno;
+        b->valid = 0;
+        //put it on new hashbucket
+        hash = blockno % NBUCK;
+        b->samehash = htable.buck[hash].samehash;
+        htable.buck[hash].samehash = b;
+        release(htable.lock + hash);
+        acquiresleep(&b->lock);
+        return b;
+      }
+      release(htable.lock + hash);
     }
   }
   panic("bget: no buffers");
@@ -120,34 +161,27 @@ brelse(struct buf *b)
     panic("brelse");
 
   releasesleep(&b->lock);
-
-  acquire(&bcache.lock);
+  int hash = b->blockno % NBUCK;
+  acquire(htable.lock + hash);
   b->refcnt--;
   if (b->refcnt == 0) {
-    // no one is waiting for it.
-    b->next->prev = b->prev;
-    b->prev->next = b->next;
-    b->next = bcache.head.next;
-    b->prev = &bcache.head;
-    bcache.head.next->prev = b;
-    bcache.head.next = b;
-  }
-  
-  release(&bcache.lock);
+    b->time = ticks;
+  } 
+  release(htable.lock + hash);
 }
 
 void
 bpin(struct buf *b) {
-  acquire(&bcache.lock);
+  acquire(htable.lock + b->blockno % NBUCK);
   b->refcnt++;
-  release(&bcache.lock);
+  release(htable.lock + b->blockno % NBUCK);
 }
 
 void
 bunpin(struct buf *b) {
-  acquire(&bcache.lock);
+  acquire(htable.lock + b->blockno % NBUCK);
   b->refcnt--;
-  release(&bcache.lock);
+  release(htable.lock + b->blockno % NBUCK);
 }
 
 
