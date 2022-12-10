@@ -76,7 +76,6 @@ bget(uint dev, uint blockno)
     if (run->blockno == blockno && run->dev == dev) {
       run->refcnt++;
       release(htable.lock + hash);
-      //release(&bcache.lock);
       acquiresleep(&run->lock);
       return run;
     }
@@ -100,18 +99,16 @@ bget(uint dev, uint blockno)
   }
   // Not cached.
   // Recycle the least recently used (LRU) unused buffer.
-  acquire(&bcache.lock);
   for (b = bcache.buf; b < bcache.buf + NBUF; b++) {
     if (b->refcnt == 0) {
       hash = b->blockno % NBUCK;
       acquire(htable.lock + hash);
       if (b->refcnt == 0){
+        b->refcnt = 1;
         struct buf * run = htable.buck + hash;
         for (; run->samehash != b; run = run->samehash);
         run->samehash = b->samehash;
         release(htable.lock + hash);
-        b->refcnt = 1;
-        release(&bcache.lock);
         b->dev = dev;
         b->blockno = blockno;
         b->valid = 0;
@@ -183,5 +180,3 @@ bunpin(struct buf *b) {
   b->refcnt--;
   release(htable.lock + b->blockno % NBUCK);
 }
-
-
