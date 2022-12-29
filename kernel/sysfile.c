@@ -165,6 +165,69 @@ bad:
   return -1;
 }
 
+uint64
+sys_symlink(void)
+{
+  char name[DIRSIZ];
+  char old[MAXPATH], new[MAXPATH];
+  struct inode *dp, *ip;
+
+  if (argstr(0, old, MAXPATH) < 0 || argstr(1, new, MAXPATH) < 0)
+    return -1;
+  begin_op();
+  if ((dp = nameiparent(new, name)) == 0) {
+    end_op();
+    return -1;
+  }
+  ilock(dp);
+  if ((ip = dirlookup(dp, name, 0))) {
+    iunlockput(dp);
+    iput(ip);
+    end_op();
+    return -1;
+  }
+  iunlock(dp);
+  if((ip = ialloc(dp->dev, T_SYMLINK)) == 0) {
+    iput(dp);
+    end_op();
+    return -1;
+  }
+  ilock(ip);
+  end_op();
+  // start to write old path into content of symbolic link
+  int max = ((MAXOPBLOCKS-1-1-2) / 2) * BSIZE;
+  int i = 0 , n = strlen(old);
+  uint64 addr = (uint64) old;
+  while(i < n){
+    int n1 = n - i, r;
+    if(n1 > max)
+      n1 = max;
+    begin_op();
+    r = writei(ip, 0, addr + i, i, n1);
+    end_op();
+    if(r != n1){
+      // error from writei
+      break;
+    }
+    i += r;
+  }
+  int ret = -1;
+  begin_op();
+  if (i == n) {
+    ilock(dp);
+    if (dirlink(dp, name, ip->inum) == 0) {
+      ip->nlink = 1;
+      iupdate(ip);
+      ret = 0;
+    }
+    iunlock(dp);
+  }
+  iunlockput(ip);
+  iput(dp);
+  end_op();
+  return ret;;
+}
+
 // Is the directory dp empty except for "." and ".." ?
 static int
 isdirempty(struct inode *dp)
@@ -309,6 +372,27 @@ sys_open(void)
       return -1;
     }
     ilock(ip);
+    if ((omode & O_NOFOLLOW) == 0) {
+      int i = 0, threshold = 10;
+      for (;ip->type == T_SYMLINK && i < threshold; i++) {
+        if (readi(ip, 0, (uint64) path, 0, ip->size) < ip->size) {
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+        iunlockput(ip);
+        if ((ip = namei(path)) == 0) {
+          end_op();
+          return -1;
+        }
+        ilock(ip);
+      }
+      if (ip->type == T_SYMLINK && i == threshold) {
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+    }
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
