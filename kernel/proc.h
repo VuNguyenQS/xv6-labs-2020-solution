@@ -80,6 +80,15 @@ struct trapframe {
   /* 280 */ uint64 t6;
 };
 
+struct map {
+  struct inode *ip;
+  uint64 uaddr;
+  uint len;
+  int perm;
+  int flags;
+  uint off;
+};
+
 enum procstate { UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
 // Per-process state
@@ -102,5 +111,6 @@ struct proc {
   struct context context;      // swtch() here to run process
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
+  struct map nummap[MAXMAP];
   char name[16];               // Process name (debugging)
 };

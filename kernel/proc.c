@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -280,6 +281,17 @@ fork(void)
     release(&np->lock);
     return -1;
   }
+  for (int i = 0; i < MAXMAP; i++) {
+    if (p->nummap[i].ip) {
+      np->nummap[i] = p->nummap[i];
+      idup(p->nummap[i].ip);
+      if (uvmcopymap(p->pagetable, np->pagetable, p->nummap[i].uaddr, p->nummap[i].len) < 0) {
+        freeproc(np);
+        release(&np->lock);
+        return -1;
+      }
+    }
+  }
   np->sz = p->sz;
 
   np->parent = p;
@@ -357,6 +369,24 @@ exit(int status)
   iput(p->cwd);
   end_op();
   p->cwd = 0;
+
+  //unmap all map
+  for (int i = 0; i < MAXMAP; i++) {
+    if (p->nummap[i].ip) {
+      struct map *mapregion = p->nummap + i;
+      uint off = 0;
+      struct inode *ip = 0;
+      if ((mapregion->perm & PTE_W) && (mapregion->flags & MAP_SHARED)) {
+        off = mapregion->off;
+        ip = mapregion->ip;
+      }
+      unmapregion(p->pagetable, mapregion->uaddr, mapregion->len, ip, off);
+      begin_op();
+      iput(mapregion->ip);
+      end_op();
+      mapregion->ip = 0;
+    }
+  }
 
   // we might re-parent a child to init. we can't be precise about
   // waking up init, since we can't acquire its lock once we've
@@ -700,4 +730,16 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+struct map *memmap(uint64 addr) {
+  struct proc *p = myproc();
+  int i = 0;
+  for (; i < MAXMAP; i++) {
+    if (p->nummap[i].ip == 0)
+      continue;
+    if (p->nummap[i].uaddr <= addr && addr < p->nummap[i].uaddr + p->nummap[i].len)
+      break;
+  }
+  return i == MAXMAP ? 0 : p->nummap + i;
 }

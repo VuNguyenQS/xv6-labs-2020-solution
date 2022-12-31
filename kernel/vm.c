@@ -5,6 +5,9 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
+#include "fcntl.h"
 
 /*
  * the kernel's page table.
@@ -183,6 +186,47 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   }
 }
 
+int
+unmapregion(pagetable_t pagatable, uint64 va, uint len, struct inode * ip, uint off) {
+  //travel each address unmap it and free it pa after that check its dirty bit and write into inode
+  off -= (va - PGROUNDDOWN(va));
+  va = PGROUNDDOWN(va);
+  uint64 last = va + len;
+  int max = ((MAXOPBLOCKS-1-1-2) / 2) * BSIZE, ret = 0;
+  for (; va < last; va += PGSIZE) {
+    pte_t *pte = walk(pagatable, va, 0);
+    if (pte && (*pte & PTE_V)) {
+      uint64 pa = PTE2PA(*pte);
+      if (ip) {
+        int i = 0, r;
+        while(i < PGSIZE){
+          int n1 = PGSIZE - i;
+          if(n1 > max)
+            n1 = max;
+
+          begin_op();
+          ilock(ip);
+          if ((r = writei(ip, 0, pa + i, off, n1)) > 0)
+            off += r;
+          iunlock(ip);
+          end_op();
+
+          if(r != n1){
+            // error from writei
+            ip = 0;
+            ret = -1;
+            break;
+          }
+          i += r;
+        }
+      }
+      kfree((void *)pa);
+      *pte = 0;
+    }
+  }
+  return ret;
+}
+
 // create an empty user page table.
 // returns 0 if out of memory.
 pagetable_t
@@ -322,6 +366,31 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
  err:
   uvmunmap(new, 0, i / PGSIZE, 1);
   return -1;
+}
+
+int
+uvmcopymap(pagetable_t old, pagetable_t new, uint64 addr, uint len)
+{
+  pte_t *pte;
+  uint64 pa, i;
+  uint flags;
+  char *mem;
+
+  for(i = PGROUNDDOWN(addr); i < addr + len; i += PGSIZE){
+    pte = walk(old, i, 0);
+    if(pte && (*pte & PTE_V)) {
+      pa = PTE2PA(*pte);
+      flags = PTE_FLAGS(*pte);
+      if((mem = kalloc()) == 0)
+        return -1;
+      memmove(mem, (char*)pa, PGSIZE);
+      if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+        kfree(mem);
+        return -1;
+      }
+    }
+  }
+  return 0;
 }
 
 // mark a PTE invalid for user access.

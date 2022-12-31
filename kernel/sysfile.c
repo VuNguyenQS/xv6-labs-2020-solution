@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "memlayout.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -483,4 +484,97 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+uint64
+sys_mmap(void)
+{ 
+  struct proc *p = myproc();
+  uint64 len, off;
+  int prot, flags, fd;
+  struct file *pfd;
+  //Read arguments and test its condition
+  argaddr(1, &len);
+  if (len > MAXMAPLEN)
+    return -1;
+  argint(2, &prot);
+  argint(3, &flags);
+  if (argfd(4, &fd, &pfd) < 0)
+    return -1;
+  argaddr(5, &off);
+  if (pfd->type != FD_INODE)
+   return -1;
+  if (pfd->readable == 0)
+    return -1;
+  if (pfd->writable == 0 && (flags & MAP_SHARED) && (prot & PROT_WRITE))
+    return -1;
+  if (off > pfd->ip->size)
+    return -1;
+  int i = 0;
+  for (; i < MAXMAP; i++) {
+    if (p->nummap[i].ip == 0)
+      break;
+  }
+  if (i == MAXMAP)
+   return -1;
+  
+  //Store metadata about the map
+  int perm = PTE_U;
+  if (prot & PROT_READ)
+    perm |= PTE_R;
+  if (prot & PROT_WRITE) 
+    perm |= PTE_W;
+  if (prot & PROT_EXEC)
+    perm |= PTE_X;
+  
+  struct map *mapstruc = p->nummap + i;
+  mapstruc->ip = pfd->ip;
+  mapstruc->uaddr = MAPADDR(i);
+  mapstruc->len = (uint) len;
+  mapstruc->off = (uint) off;
+  mapstruc->flags = flags;  
+  mapstruc->perm = perm;
+
+  //side effect
+  idup(mapstruc->ip);
+  
+  return mapstruc->uaddr;
+}
+
+uint64
+sys_munmap(void)
+{   
+  uint64 addr, len;
+  struct proc *p = myproc();
+  argaddr(0, &addr);
+  argaddr(1, &len);
+  struct map * mapregion = memmap(addr);
+  if (mapregion == 0)
+    return -1; 
+  if ((addr + len < addr) || (addr + len > mapregion->uaddr + mapregion->len))
+    return -1;
+  uint off = 0;
+  struct inode *ip = 0;
+  if ((mapregion->perm & PTE_W) && (mapregion->flags & MAP_SHARED)) {
+    off = addr - mapregion->uaddr + mapregion->off;
+    ip = mapregion->ip;
+  }
+  int ret = unmapregion(p->pagetable, addr, len, ip, off);
+  if (addr == mapregion->uaddr) {
+    if (addr + len == mapregion->uaddr + mapregion->len) {
+      //unmap whole region
+      begin_op();
+      iput(mapregion->ip);
+      end_op();
+    }
+    else {
+      //unmap part of region
+      mapregion->uaddr = addr + len;
+      mapregion->len -= len;
+      mapregion->off += len;
+    }
+  }
+  else 
+    mapregion->len -= len;
+  return ret;
 }

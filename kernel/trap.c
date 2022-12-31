@@ -67,6 +67,47 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if (r_scause() == 13) {
+    // Read page fault
+    uint64 faultaddr = r_stval();
+    struct map *mapregion = memmap(faultaddr);
+    if (mapregion == 0)
+      p->killed = 1;
+    else {
+      faultaddr = PGROUNDDOWN(faultaddr);
+      uint64 pa = (uint64) kalloc();
+      if (pa == 0)
+        p->killed = 1;
+      else if (mappages(p->pagetable, faultaddr, PGSIZE, pa, mapregion->perm) < 0) {
+        kfree((void *)pa);
+        p->killed = 1;
+      }
+      else {
+        memset((void*)pa, 0, PGSIZE);
+        ilock(mapregion->ip);
+        uint inodeoff = faultaddr - mapregion->uaddr + mapregion->off; 
+        if (readi(mapregion->ip, 0, pa, inodeoff , PGSIZE) < 0)
+          p->killed = 1;
+        iunlock(mapregion->ip);
+      }
+    }
+  } else if (r_scause() == 15) {
+    // Write page fault
+    uint64 faultaddr = r_stval();
+    struct map *mapregion = memmap(faultaddr);
+    if (mapregion == 0 || (mapregion->perm & PTE_W) == 0)
+      p->killed = 1;
+    else {
+      faultaddr = PGROUNDDOWN(faultaddr);
+      uint64 pa = (uint64) kalloc();
+      if (pa == 0)
+        p->killed = 1;
+      else if (mappages(p->pagetable, faultaddr, PGSIZE, pa, mapregion->perm) < 0) {
+        kfree((void *)pa);
+        p->killed = 1;
+      }
+      else memset((void *)pa, 0, PGSIZE);
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
