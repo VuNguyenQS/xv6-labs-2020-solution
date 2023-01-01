@@ -551,7 +551,7 @@ sys_munmap(void)
   struct map * mapregion = memmap(addr);
   if (mapregion == 0)
     return -1; 
-  if ((addr + len < addr) || (addr + len > mapregion->uaddr + mapregion->len))
+  if ((addr + len < addr) || (addr < mapregion->uaddr) || (addr + len > mapregion->uaddr + mapregion->len))
     return -1;
   uint off = 0;
   struct inode *ip = 0;
@@ -561,11 +561,12 @@ sys_munmap(void)
   }
   int ret = unmapregion(p->pagetable, addr, len, ip, off);
   if (addr == mapregion->uaddr) {
-    if (addr + len == mapregion->uaddr + mapregion->len) {
+    if (len == mapregion->len) {
       //unmap whole region
       begin_op();
       iput(mapregion->ip);
       end_op();
+      mapregion->ip = 0;
     }
     else {
       //unmap part of region

@@ -198,27 +198,30 @@ unmapregion(pagetable_t pagatable, uint64 va, uint len, struct inode * ip, uint 
     if (pte && (*pte & PTE_V)) {
       uint64 pa = PTE2PA(*pte);
       if (ip) {
-        int i = 0, r;
-        while(i < PGSIZE){
-          int n1 = PGSIZE - i;
-          if(n1 > max)
-            n1 = max;
+        if (*pte & PTE_D) {
+          int i = 0, r;
+          while(i < PGSIZE){
+            int n1 = PGSIZE - i;
+            if(n1 > max)
+              n1 = max;
 
-          begin_op();
-          ilock(ip);
-          if ((r = writei(ip, 0, pa + i, off, n1)) > 0)
-            off += r;
-          iunlock(ip);
-          end_op();
+            begin_op();
+            ilock(ip);
+            if ((r = writei(ip, 0, pa + i, off, n1)) > 0)
+              off += r;
+            iunlock(ip);
+            end_op();
 
-          if(r != n1){
-            // error from writei
-            ip = 0;
-            ret = -1;
-            break;
+            if(r != n1){
+              // error from writei
+              ip = 0;
+              ret = -1;
+              break;
+            }
+            i += r;
           }
-          i += r;
         }
+        else off += PGSIZE;
       }
       kfree((void *)pa);
       *pte = 0;
